@@ -6,17 +6,11 @@
 
 static uint64_t mac_to_feature(const uint8_t mac[6])
 {
-    uint8_t feature[8] = {0};
-
-    // ESP32 uses little endian
-    feature[7] = mac[0];
-    feature[6] = mac[1];
-    feature[5] = mac[2];
-    feature[4] = mac[3];
-    feature[3] = mac[4];
-    feature[2] = mac[5];
-
-    return (uint64_t)feature;
+    uint64_t result = 0;
+    for (int i = 0; i < 6; i++) {
+        result |= ((uint64_t)mac[i]) << (8 * i);
+    }
+    return result;
 }
 
 static double euclidean_dist(const Features *f_1, const Features *f_2)
@@ -26,13 +20,19 @@ static double euclidean_dist(const Features *f_1, const Features *f_2)
     return sqrt(x * x + y * y);
 }
 
-static int cmp(const void *fl_1, const void *fl_2, void *query)
+static int cmp(void *query, const void *fl_1, const void *fl_2)
 {
     Features *f_1 = &((FeaturesLabel *)fl_1)->features;
     Features *f_2 = &((FeaturesLabel *)fl_2)->features;
     double dist_1 = euclidean_dist((Features *)query, f_1);
     double dist_2 = euclidean_dist((Features *)query, f_2);
-    return (int)(dist_1 - dist_2);
+
+    if (dist_1 < dist_2)
+        return -1;
+    else if (dist_1 > dist_2)
+        return 1;
+    else
+        return 0;
 }
 
 static void ap_to_features(const PreprocData *pd, const AccessPoint *ap, Features *features)
@@ -52,8 +52,8 @@ static void ap_to_features(const PreprocData *pd, const AccessPoint *ap, Feature
     features->y = ((double)(rssi - pd->min_rssi)) / diff_rssi;
 }
 
-static void aps_to_features_set(const AccessPoint aps[], Features features_set[], uint64_t count,
-                                PreprocData *preproc_data)
+void aps_to_features_set(const AccessPoint aps[], Features features_set[], uint64_t count,
+                         PreprocData *preproc_data)
 {
     uint64_t min_mac = UINT64_MAX;
     uint64_t max_mac = 0;
@@ -75,24 +75,32 @@ static void aps_to_features_set(const AccessPoint aps[], Features features_set[]
     preproc_data->min_rssi = min_rssi;
     preproc_data->max_rssi = max_rssi;
 
+    /*
     printf("min_mac: %llu\n", min_mac);
     printf("max_mac: %llu\n", max_mac);
     printf("min_rssi: %d\n", min_rssi);
     printf("max_rssi: %d\n", max_rssi);
+    */
 
     for (uint32_t i = 0; i < count; i++) {
         ap_to_features(preproc_data, &aps[i], &features_set[i]);
-        printf("FEATURES %lu: %lf %lf\n", i, features_set[i].x, features_set[i].y);
+        //printf("FEATURES %u: %lf %lf\n", i, features_set[i].x, features_set[i].y);
     }
 }
 
-static Pos knn(FeaturesLabel fl_set[], uint32_t count, uint32_t k, Features *query)
+Pos knn(FeaturesLabel fl_set[], uint32_t count, uint32_t k, Features *query)
 {
+#ifdef __APPLE__ // macOS version
+    qsort_r(fl_set, count, sizeof(FeaturesLabel), query, cmp);
+#else // Linux / glibc version
     qsort_r(fl_set, count, sizeof(FeaturesLabel), cmp, query);
+#endif
+
     uint64_t n = MIN(k, count);
     double x_mean = 0;
     double y_mean = 0;
     for (uint32_t i = 0; i < n; i++) {
+        printf("x: %hd y: %hd\n", fl_set[i].label.x, fl_set[i].label.y);
         x_mean += (double)fl_set[i].label.x;
         y_mean += (double)fl_set[i].label.y;
     }
